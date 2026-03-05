@@ -1,0 +1,21 @@
+# Hidden files
+.*
+
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# IDE
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# OS
+Thumbs.db
