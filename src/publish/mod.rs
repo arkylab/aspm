@@ -22,10 +22,10 @@ pub struct Publisher {
 
 #[allow(dead_code)]
 impl Publisher {
-    pub fn new(config: AspubConfig) -> Self {
+    pub fn new(config: AspubConfig, base_dir: PathBuf) -> Self {
         Self {
             config,
-            base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            base_dir,
         }
     }
 

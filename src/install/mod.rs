@@ -1,8 +1,9 @@
 //! Installation logic
 //!
-//! Supports two repository formats:
+//! Supports three repository formats:
 //! 1. aspm format: has aspub.yaml, installs based on publish config
 //! 2. Claude plugin format: has skills/agents/commands/hooks/rules directories
+//! 3. Single SKILL.md format: only has a SKILL.md file, auto-wraps in skills/ directory
 //!
 //! Supports two install modes per target directory:
 //! - Plain: copies resources to <target>/<type>/<pkg>/
@@ -18,8 +19,13 @@ use crate::config::{AspubConfig, EffectiveMode, InstallTarget};
 use crate::publish::resolve_all_publish_paths;
 use crate::resolver::ResolvedDependency;
 
+use settings::PluginMeta;
+
 /// Resource types that can be installed from Claude plugin format
 const RESOURCE_TYPES: [&str; 5] = ["skills", "agents", "commands", "hooks", "rules"];
+
+/// Directory name for Claude plugin mode installations
+pub const PLUGINS_DIR: &str = "-plugins";
 
 /// Repository format detected during installation
 #[derive(Debug, Clone)]
@@ -27,10 +33,19 @@ pub enum RepoFormat {
     /// aspm format with aspub.yaml
     Aspm {
         config: AspubConfig,
+        /// Whether .claude-plugin directory exists in the repo
+        has_claude_plugin: bool,
     },
     /// Claude plugin format with resource directories
     Plugin {
         available_types: Vec<String>,
+        /// Whether .claude-plugin directory exists in the repo
+        has_claude_plugin: bool,
+    },
+    /// Single SKILL.md format: wrap all files in skills/{pkg}/
+    SingleSkill {
+        /// Whether .claude-plugin directory exists in the repo
+        has_claude_plugin: bool,
     },
 }
 
@@ -45,12 +60,15 @@ impl Installer {
     }
 
     /// Detect repository format
-    fn detect_format(repo_path: &Path) -> Result<RepoFormat> {
+    fn detect_format(repo_path: &Path, pkg_name: &str) -> Result<RepoFormat> {
+        // Check for .claude-plugin directory (used by all formats)
+        let has_claude_plugin = repo_path.join(".claude-plugin").is_dir();
+
         // Check for aspub.yaml first (priority)
         let aspub_path = repo_path.join("aspub.yaml");
         if aspub_path.exists() {
             let config = AspubConfig::load(aspub_path.to_str().unwrap())?;
-            return Ok(RepoFormat::Aspm { config });
+            return Ok(RepoFormat::Aspm { config, has_claude_plugin });
         }
 
         // Check for Claude plugin format (resource directories at root)
@@ -60,18 +78,53 @@ impl Installer {
             .collect();
 
         if !available_types.is_empty() {
-            return Ok(RepoFormat::Plugin { available_types });
+            return Ok(RepoFormat::Plugin { available_types, has_claude_plugin });
+        }
+
+        // Check for single SKILL.md format
+        if Self::find_skill_md(repo_path).is_some() {
+            eprintln!(
+                "Warning: Package '{}' has no standard directory structure but contains SKILL.md.",
+                pkg_name
+            );
+            eprintln!("  Auto-wrapping in skills/ directory for compatibility.");
+            return Ok(RepoFormat::SingleSkill { has_claude_plugin });
         }
 
         bail!(
-            "Unrecognized repository format. Missing aspub.yaml or resource directories (skills, agents, commands, hooks, rules)"
+            "Package '{}' has unrecognized repository format. Missing aspub.yaml, resource directories, or SKILL.md file",
+            pkg_name
         )
+    }
+
+    /// Find SKILL.md file in repository (root or subdirectories)
+    fn find_skill_md(repo_path: &Path) -> Option<PathBuf> {
+        // Check root level first
+        let root_skill = repo_path.join("SKILL.md");
+        if root_skill.exists() {
+            return Some(root_skill);
+        }
+
+        // Search in subdirectories (one level deep)
+        if let Ok(entries) = fs::read_dir(repo_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let skill_file = path.join("SKILL.md");
+                    if skill_file.exists() {
+                        return Some(skill_file);
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// Install a single dependency to all target directories
     pub fn install(&self, dep: &ResolvedDependency) -> Result<()> {
         let repo_path = self.get_repo_path(dep)?;
-        let format = Self::detect_format(&repo_path)?;
+        let format = Self::detect_format(&repo_path, &dep.name)?;
 
         let mut errors = Vec::new();
 
@@ -130,11 +183,14 @@ impl Installer {
         target_dir: &Path,
     ) -> Result<()> {
         match format {
-            RepoFormat::Aspm { config } => {
+            RepoFormat::Aspm { config, .. } => {
                 self.install_aspm_plain(dep, repo_path, config, target_dir)
             }
-            RepoFormat::Plugin { available_types } => {
+            RepoFormat::Plugin { available_types, .. } => {
                 self.install_plugin_plain(dep, repo_path, available_types, target_dir)
+            }
+            RepoFormat::SingleSkill { .. } => {
+                self.install_single_skill_plain(dep, repo_path, target_dir)
             }
         }
     }
@@ -229,35 +285,200 @@ impl Installer {
         Ok(())
     }
 
+    fn install_single_skill_plain(
+        &self,
+        dep: &ResolvedDependency,
+        repo_path: &Path,
+        target_dir: &Path,
+    ) -> Result<()> {
+        // Wrap all files in skills/{package_name}/
+        let dst_skill_dir = target_dir.join("skills").join(&dep.name);
+        
+        if dst_skill_dir.exists() {
+            fs::remove_dir_all(&dst_skill_dir)?;
+        }
+        fs::create_dir_all(&dst_skill_dir)?;
+        
+        // Copy all files from repo root to skills/{package_name}/
+        self.copy_dir_all_excluding_git(repo_path, &dst_skill_dir)?;
+        self.write_marker(&dst_skill_dir)?;
+        
+        println!("  Installed {} -> {} (wrapped in skills/)", dep.name, dst_skill_dir.display());
+        Ok(())
+    }
+
     // ── Claude mode ───────────────────────────────────────────────────────────
 
     fn install_claude(
         &self,
         dep: &ResolvedDependency,
         repo_path: &Path,
-        _format: &RepoFormat,
+        format: &RepoFormat,
         target_dir: &Path,
     ) -> Result<()> {
-        // Always copy the repo root to <target>/-plugins/<pkg>/ (excluding .git)
-        let source_root = repo_path.to_path_buf();
-
-        let plugins_dir = target_dir.join("-plugins");
+        let plugins_dir = target_dir.join(PLUGINS_DIR);
         let dst = plugins_dir.join(&dep.name);
 
-        // Copy source_root/* -> <target>/-plugins/<pkg>/ (excluding .git)
-        if dst.exists() {
-            fs::remove_dir_all(&dst)?;
-        }
-        fs::create_dir_all(&dst)?;
-        self.copy_dir_all_excluding_git(&source_root, &dst)?;
-        self.write_marker(&dst)?;
+        // Determine if we should copy entire repo or only publish items
+        let (should_copy_all, has_claude_plugin, aspub_config) = self.analyze_claude_install_mode(format);
 
-        // Update settings.local.json (read marketplace name from .claude-plugin/marketplace.json)
-        let settings_path = target_dir.join("settings.local.json");
-        settings::register_plugin(&settings_path, &dst, &plugins_dir)?;
+        if should_copy_all {
+            // Situation 1 or 3: Copy entire repo
+            self.install_claude_full(repo_path, &dst, dep, has_claude_plugin, target_dir)?;
+        } else {
+            // Situation 2: Copy only publish items
+            self.install_claude_publish_only(repo_path, &dst, dep, aspub_config.as_ref().unwrap(), target_dir)?;
+        }
 
         println!("  Installed {} -> {} (claude mode)", dep.name, dst.display());
         Ok(())
+    }
+
+    /// Analyze which Claude install mode to use
+    /// Returns (should_copy_all, has_claude_plugin, aspub_config)
+    fn analyze_claude_install_mode(&self, format: &RepoFormat) -> (bool, bool, Option<AspubConfig>) {
+        match format {
+            RepoFormat::Aspm { config, has_claude_plugin } => {
+                // Situation 3: Has .claude-plugin -> copy all
+                if *has_claude_plugin {
+                    return (true, true, None);
+                }
+                // Situation 2: Has publish -> copy only publish
+                if config.publish.is_some() && !config.publish.as_ref().unwrap().is_empty() {
+                    return (false, false, Some(config.clone()));
+                }
+                // Situation 1: No publish -> copy all
+                (true, false, None)
+            }
+            RepoFormat::Plugin { has_claude_plugin, .. } => {
+                // Situation 3 or 1: Plugin format always copies all
+                (true, *has_claude_plugin, None)
+            }
+            RepoFormat::SingleSkill { has_claude_plugin } => {
+                // Situation 3 or 1: Single skill format always copies all
+                (true, *has_claude_plugin, None)
+            }
+        }
+    }
+
+    /// Claude mode: Copy entire repository
+    fn install_claude_full(
+        &self,
+        repo_path: &Path,
+        dst: &Path,
+        dep: &ResolvedDependency,
+        has_claude_plugin: bool,
+        target_dir: &Path,
+    ) -> Result<()> {
+        let plugins_dir = target_dir.join(PLUGINS_DIR);
+
+        // Copy source_root/* -> dst/ (excluding .git)
+        if dst.exists() {
+            fs::remove_dir_all(dst)?;
+        }
+        fs::create_dir_all(dst)?;
+        self.copy_dir_all_excluding_git(repo_path, dst)?;
+        self.write_marker(dst)?;
+
+        // For SingleSkill format, wrap files in skills/ directory
+        if matches!(Self::detect_format(repo_path, &dep.name)?, RepoFormat::SingleSkill { .. }) {
+            let skills_dir = dst.join("skills").join(&dep.name);
+            fs::create_dir_all(&skills_dir)?;
+
+            // Move all files (except .aspm, .claude-plugin and skills/) to skills/{package_name}/
+            let entries: Vec<_> = fs::read_dir(dst)?
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    let name = e.file_name();
+                    name != ".aspm" && name != "skills" && name != ".claude-plugin"
+                })
+                .collect();
+
+            for entry in entries {
+                let src = entry.path();
+                let file_name = entry.file_name();
+                let dst_path = skills_dir.join(&file_name);
+                fs::rename(&src, &dst_path)?;
+            }
+        }
+
+        // Prepare auto-generation metadata (only if no existing .claude-plugin)
+        if !has_claude_plugin {
+            let version = Self::extract_version(dep);
+            let auto_meta = PluginMeta::new(dep.name.clone(), version, dep.git_url.clone());
+
+            // Update settings.local.json with auto-generated metadata
+            let settings_path = target_dir.join("settings.local.json");
+            settings::register_plugin(&settings_path, dst, &plugins_dir, Some(&auto_meta))?;
+        } else {
+            // Use existing .claude-plugin, just register in settings.local.json
+            let settings_path = target_dir.join("settings.local.json");
+            settings::register_plugin(&settings_path, dst, &plugins_dir, None)?;
+        }
+
+        Ok(())
+    }
+
+    /// Claude mode: Copy only publish items
+    fn install_claude_publish_only(
+        &self,
+        repo_path: &Path,
+        dst: &Path,
+        dep: &ResolvedDependency,
+        config: &AspubConfig,
+        target_dir: &Path,
+    ) -> Result<()> {
+        let plugins_dir = target_dir.join(PLUGINS_DIR);
+
+        // Prepare destination
+        if dst.exists() {
+            fs::remove_dir_all(dst)?;
+        }
+        fs::create_dir_all(dst)?;
+        self.write_marker(dst)?;
+
+        let Some(publish) = &config.publish else {
+            bail!("Expected publish config for publish-only install");
+        };
+
+        // Copy each published resource type
+        for (resource_type, paths) in publish {
+            let items = resolve_all_publish_paths(paths, repo_path, resource_type)?;
+            for item in &items {
+                let item_dst = dst.join(resource_type).join(&item.install_name);
+                if item.is_dir {
+                    self.copy_directory(&item.source_path, &item_dst)?;
+                } else {
+                    if let Some(parent) = item_dst.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::copy(&item.source_path, &item_dst)?;
+                }
+            }
+        }
+
+        // Auto-generate .claude-plugin
+        let version = Self::extract_version(dep);
+        let auto_meta = PluginMeta::new(dep.name.clone(), version, dep.git_url.clone());
+
+        let settings_path = target_dir.join("settings.local.json");
+        settings::register_plugin(&settings_path, dst, &plugins_dir, Some(&auto_meta))?;
+
+        Ok(())
+    }
+
+    /// Extract version from resolved dependency
+    fn extract_version(dep: &ResolvedDependency) -> String {
+        if let Some(tag) = &dep.resolved_tag {
+            // Strip 'v' prefix if present (e.g., "v1.2.3" -> "1.2.3")
+            if tag.starts_with('v') && tag.len() > 1 {
+                tag[1..].to_string()
+            } else {
+                tag.clone()
+            }
+        } else {
+            "0.0.0".to_string()
+        }
     }
 
     /// Recursively copy directory contents, skipping .git
@@ -338,54 +559,56 @@ impl Installer {
 
     // ── Public API ────────────────────────────────────────────────────────────
 
-    /// Remove packages that have a .aspm marker but are no longer in the dependency list
-    /// Cleans both plain and claude mode files regardless of current mode
-    fn prune(&self, keep: &std::collections::HashSet<String>) -> Result<()> {
+    /// Remove directories that have a .aspm marker
+    /// Recursively scans target directories and removes any subdirectory containing .aspm file
+    /// Also cleans up settings.local.json entries for non-existent paths
+    /// project_root: the project root directory for resolving relative paths in settings
+    pub fn prune(&self, _keep: &std::collections::HashSet<String>, project_root: &Path) -> Result<()> {
         for target in &self.target_dirs {
-            // Clean plain mode files (<type>/<pkg>/)
-            let mut managed = std::collections::HashSet::new();
-            for resource_type in RESOURCE_TYPES {
-                let type_dir = target.path.join(resource_type);
-                if !type_dir.is_dir() {
-                    continue;
-                }
-                for entry in fs::read_dir(&type_dir)? {
-                    let entry = entry?;
-                    if entry.path().join(".aspm").exists() {
-                        managed.insert(entry.file_name().to_string_lossy().to_string());
-                    }
-                }
-            }
-            for pkg in &managed {
-                if !keep.contains(pkg) {
-                    println!("  Pruning {}...", pkg);
-                    self.remove(pkg)?;
-                }
-            }
-
-            // Clean claude mode files (-plugins/<pkg>/)
-            let plugins_dir = target.path.join("-plugins");
-            if plugins_dir.is_dir() {
-                for entry in fs::read_dir(&plugins_dir)? {
-                    let entry = entry?;
-                    if entry.path().join(".aspm").exists() {
-                        let pkg = entry.file_name().to_string_lossy().to_string();
-                        if !keep.contains(&pkg) && !managed.contains(&pkg) {
-                            // Only print once if not already printed above
-                            println!("  Pruning {}...", pkg);
-                        }
-                        self.remove(&pkg)?;
-                    }
-                }
+            self.prune_directory(&target.path)?;
+            
+            // Clean up settings.local.json after pruning directories
+            let settings_path = target.path.join("settings.local.json");
+            if settings_path.exists() {
+                settings::cleanup_settings(&settings_path, project_root)?;
             }
         }
         Ok(())
     }
 
+    /// Recursively prune a directory, removing any subdirectory with .aspm marker
+    fn prune_directory(&self, dir: &Path) -> Result<()> {
+        if !dir.is_dir() {
+            return Ok(());
+        }
+
+        // Check if this directory itself has a .aspm marker
+        let marker_path = dir.join(".aspm");
+        if marker_path.exists() {
+            println!("  Pruning {}...", dir.display());
+            fs::remove_dir_all(dir)?;
+            return Ok(()); // Directory removed, no need to scan further
+        }
+
+        // Recursively scan subdirectories
+        let entries: Vec<_> = fs::read_dir(dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect();
+
+        for entry in entries {
+            self.prune_directory(&entry.path())?;
+        }
+
+        Ok(())
+    }
+
     /// Install all dependencies, pruning any previously-managed packages no longer in the list
-    pub fn install_all(&self, deps: &[ResolvedDependency]) -> Result<()> {
+    /// project_root: the project root directory for resolving relative paths in settings
+    #[allow(dead_code)]
+    pub fn install_all(&self, deps: &[ResolvedDependency], project_root: &Path) -> Result<()> {
         let keep: std::collections::HashSet<String> = deps.iter().map(|d| d.name.clone()).collect();
-        self.prune(&keep)?;
+        self.prune(&keep, project_root)?;
         println!("Installing {} dependencies...", deps.len());
         for dep in deps {
             self.install(dep)?;
@@ -394,6 +617,7 @@ impl Installer {
     }
 
     /// Remove a package from all target directories (both plain and claude mode files)
+    #[allow(dead_code)]
     pub fn remove(&self, package_name: &str) -> Result<()> {
         for target in &self.target_dirs {
             // Remove plain mode files
@@ -406,13 +630,17 @@ impl Installer {
             }
 
             // Remove claude mode files
-            let plugins_dir = target.path.join("-plugins");
+            let plugins_dir = target.path.join(PLUGINS_DIR);
             let package_dir = plugins_dir.join(package_name);
             if package_dir.exists() {
                 // Try to unregister from settings.local.json (ignore errors if not a valid plugin)
                 let settings_path = target.path.join("settings.local.json");
                 if settings_path.exists() {
-                    let _ = settings::unregister_plugin(&settings_path, &package_dir);
+                    let _ = settings::unregister_plugin(
+                        &settings_path,
+                        &package_dir,
+                        package_name,
+                    );
                 }
                 fs::remove_dir_all(&package_dir)?;
                 println!("  Removed {} from {}", package_name, package_dir.display());

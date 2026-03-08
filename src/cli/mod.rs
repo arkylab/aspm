@@ -2,7 +2,10 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::config::{AspkgConfig, AspubConfig, ConfigType, InstallMode, InstallTarget};
+use crate::config::{
+    merge_resolved_dependencies, parse_and_flatten, print_merge_log, AspkgConfig, AspubConfig,
+    InstallMode, InstallTarget, InstallTargets, SourceFile,
+};
 use crate::install::Installer;
 use crate::resolver::DependencyResolver;
 
@@ -43,6 +46,10 @@ pub struct InstallArgs {
     /// Install to specified directory
     #[arg(long)]
     pub to: Option<PathBuf>,
+    
+    /// Extra dependencies config file (dependencies in this file will override aspkg.yaml)
+    #[arg(long)]
+    pub extra: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -89,20 +96,151 @@ pub fn handle_init(args: InitArgs) -> Result<()> {
 }
 
 pub fn handle_install(args: InstallArgs) -> Result<()> {
-    let config_type = ConfigType::detect()?;
+    // Check if aspkg.yaml exists
+    let aspkg_path = std::path::Path::new("aspkg.yaml");
+    if !aspkg_path.exists() {
+        anyhow::bail!("No aspkg.yaml found. Run 'aspm init --consumer' first.");
+    }
 
-    let install_targets = args.to.clone()
-        .map(|p| vec![InstallTarget::new(p, InstallMode::Auto)])
-        .unwrap_or_else(|| config_type.get_install_to().as_slice().to_vec());
+    // 1. Parse and flatten aspkg.yaml
+    println!("Reading config from {}...", aspkg_path.display());
+    let base_deps = parse_and_flatten(aspkg_path, SourceFile::Aspkg)?;
 
-    let dependencies = config_type.get_dependencies();
+    // 2. Parse and flatten extra.yaml (if provided)
+    let extra_deps = if let Some(extra_path) = &args.extra {
+        if !extra_path.exists() {
+            anyhow::bail!("Extra config file not found: {}", extra_path.display());
+        }
+        println!("Reading extra config from {}...", extra_path.display());
+        parse_and_flatten(extra_path, SourceFile::Extra(extra_path.clone()))?
+    } else {
+        vec![]
+    };
+
+    // 3. Merge dependencies (extra overrides aspkg.yaml)
+    println!("Merging dependencies (extra overrides aspkg.yaml)...");
+    let merged_deps = merge_resolved_dependencies(base_deps, extra_deps);
+
+    // 4. Check for aspub.yaml and merge install_to / check conflicts
+    let aspub_path = std::path::Path::new("aspub.yaml");
+    let aspub_config = if aspub_path.exists() {
+        println!("Reading config from {}...", aspub_path.display());
+        Some(AspubConfig::load(aspub_path.to_str().unwrap())?)
+    } else {
+        None
+    };
+
+    // 5. Check conflicts between merged (aspkg+extra) and aspub.yaml
+    if let Some(ref config) = aspub_config {
+        let merged_names: std::collections::HashSet<_> = merged_deps.iter().map(|d| &d.name).collect();
+        for name in config.dependencies.keys() {
+            if merged_names.contains(name) {
+                anyhow::bail!(
+                    "Dependency '{}' defined in both aspub.yaml and aspkg.yaml/extra. Please remove one manually.",
+                    name
+                );
+            }
+        }
+    }
+
+    // 6. Merge install_to: aspub.yaml's install_to overrides aspkg.yaml's global install_to
+    let aspub_install_to = aspub_config.as_ref().and_then(|c| c.install_to.clone());
+    let final_deps: Vec<_> = merged_deps.into_iter().map(|mut dep| {
+        // If dependency doesn't have its own install_to, use aspub's global (if exists) or keep as is
+        if let Some(ref install_to) = aspub_install_to {
+            if dep.install_to.0.is_empty() || dep.install_to.0.iter().all(|t| t.path == std::path::PathBuf::from(".aspm")) {
+                dep.install_to = install_to.clone();
+            }
+        }
+        dep
+    }).collect();
+
+    // 7. Add aspub.yaml dependencies
+    let mut all_deps = final_deps;
+    if let Some(config) = &aspub_config {
+        let aspub_install_to = config.install_to.clone().unwrap_or_default();
+        for (name, source) in &config.dependencies {
+            let install_to = source.install_to().cloned().unwrap_or_else(|| aspub_install_to.clone());
+            all_deps.push(crate::config::ResolvedDependencyConfig {
+                name: name.clone(),
+                source: source.clone(),
+                install_to,
+                source_file: SourceFile::Aspkg, // Using Aspkg as placeholder for aspub
+                overridden: false,
+            });
+        }
+    }
+
+    // 8. Print merge log
+    print_merge_log(&all_deps, args.extra.as_deref());
+
+    // 9. Build dependency map for resolver
+    let mut dep_map = std::collections::HashMap::new();
+    for dep in &all_deps {
+        dep_map.insert(dep.name.clone(), dep.source.clone());
+    }
+
+    // 10. Resolve all dependencies recursively
+    println!("Resolving dependencies...");
     let resolver = DependencyResolver::new()?;
-    let all_deps = resolver.resolve_all_recursive(dependencies)?;
+    let mut resolved_deps = resolver.resolve_all_recursive(&dep_map)?;
 
-    let installer = Installer::new(install_targets);
-    installer.install_all(&all_deps)?;
+    // 11. Attach install_to to resolved dependencies
+    let install_to_map: std::collections::HashMap<_, _> = all_deps
+        .iter()
+        .map(|d| (d.name.clone(), d.install_to.clone()))
+        .collect();
 
-    println!("Installed {} dependencies", all_deps.len());
+    for dep in &mut resolved_deps {
+        if let Some(install_to) = install_to_map.get(&dep.name) {
+            dep.install_to = Some(install_to.clone());
+        }
+    }
+
+    // 12. Handle --to override (if specified, all deps install to that directory)
+    if let Some(to) = &args.to {
+        println!("Overriding install target to: {}", to.display());
+        let override_targets = InstallTargets(vec![InstallTarget::new(to.clone(), InstallMode::Auto)]);
+        for dep in &mut resolved_deps {
+            dep.install_to = Some(override_targets.clone());
+        }
+    }
+
+    // 13. Collect all target directories for pruning
+    let all_targets: std::collections::HashSet<_> = resolved_deps
+        .iter()
+        .flat_map(|dep| {
+            dep.install_to
+                .as_ref()
+                .map(|t| t.0.iter().map(|target| target.path.clone()).collect::<Vec<_>>())
+                .unwrap_or_default()
+        })
+        .collect();
+
+    // 14. Prune old packages from all target directories
+    println!("Pruning old packages...");
+    let keep: std::collections::HashSet<String> = resolved_deps.iter().map(|d| d.name.clone()).collect();
+    // Project root is the directory containing aspkg.yaml
+    let project_root = aspkg_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+    for target_path in &all_targets {
+        let installer = Installer::new(vec![InstallTarget::new(target_path.clone(), InstallMode::Auto)]);
+        installer.prune(&keep, &project_root)?;
+    }
+
+    // 15. Install each dependency with its own install_to
+    println!("Installing {} dependencies...", resolved_deps.len());
+    for dep in &resolved_deps {
+        let targets = dep.install_to.clone().unwrap_or_else(|| {
+            InstallTargets(vec![InstallTarget::new(
+                std::path::PathBuf::from(".aspm"),
+                InstallMode::Auto,
+            )])
+        });
+        let installer = Installer::new(targets.0);
+        installer.install(dep)?;
+    }
+
+    println!("Installed {} dependencies", resolved_deps.len());
     Ok(())
 }
 

@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crate::config::{AspubConfig, DependencySource};
+use crate::config::{AspubConfig, DependencySource, InstallTargets};
 use crate::git::{GitManager, RefType, VersionRef};
 
 /// Dependency graph for managing resolved dependencies
@@ -151,6 +151,8 @@ pub struct ResolvedDependency {
     pub dependencies: HashMap<String, DependencySource>,
     /// Local cache path of the cloned repository
     pub repo_cache_path: Option<PathBuf>,
+    /// Install targets for this dependency
+    pub install_to: Option<InstallTargets>,
 }
 
 /// Dependency resolver
@@ -177,7 +179,7 @@ impl DependencyResolver {
                 // For now, this is not supported in phase 1
                 bail!("Simple version '{}' requires a git source. Use --git option.", version);
             }
-            DependencySource::Detailed { git, version, tag, branch, commit, path } => {
+            DependencySource::Detailed { git, version, tag, branch, commit, path, install_to } => {
                 if let Some(p) = path {
                     // Local path dependency
                     return Ok(ResolvedDependency {
@@ -189,10 +191,12 @@ impl DependencyResolver {
                         git_url: None,
                         dependencies: HashMap::new(),
                         repo_cache_path: Some(PathBuf::from(p)),
+                        install_to: install_to.clone(),
                     });
                 }
                 
                 let git_url = git.clone().unwrap_or_default();
+                println!("  Fetching '{}' from {}", name, git_url);
                 let repo_cache_path = self.git_manager.get_cache_path(&git_url);
                 let repo = self.git_manager.clone_or_open(&git_url)?;
                 
@@ -243,6 +247,7 @@ impl DependencyResolver {
                     git_url: Some(git_url),
                     dependencies,
                     repo_cache_path: Some(repo_cache_path),
+                    install_to: install_to.clone(),
                 })
             }
         }
@@ -381,6 +386,7 @@ impl DependencyResolver {
         };
         
         // Clone or open repo
+        println!("  Fetching '{}' from {}", _name, git_url);
         let repo = self.git_manager.clone_or_open(&git_url)?;
         
         // Get the ref

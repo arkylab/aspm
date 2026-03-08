@@ -202,6 +202,8 @@ dependencies:
     tag: "v4.1.1"
 ```
 
+**Note:** If the repository has only a `SKILL.md` file (no standard directories), aspm auto-wraps it in a `skills/` directory structure.
+
 ## Install Modes
 
 aspm supports two installation modes:
@@ -230,6 +232,8 @@ Copies entire repo to `<target>/-plugins/<pkg>/` and updates `settings.local.jso
 │       └── .claude-plugin/marketplace.json
 └── settings.local.json
 ```
+
+**Note:** If the source repository lacks `.claude-plugin/marketplace.json`, aspm auto-generates it with the package name as marketplace name (suffixed with `-dev`) and plugin name.
 
 ### Mode Configuration
 
@@ -278,6 +282,8 @@ aspm init --consumer          # Create a consumer project
 # Dependency Management
 aspm install                  # Install all dependencies
 aspm install --to <dir>       # Install to specific directory
+aspm install --extra <file>   # Merge extra config (overrides aspkg.yaml)
+aspm install --extra local.yaml --to .cursor  # Combined options
 
 # Cache Management
 aspm cache clean              # Clear all cached repositories
@@ -321,22 +327,38 @@ dependencies:
 ### Consumer Project (aspkg.yaml)
 
 ```yaml
-# Multiple targets (dependencies copied to all)
+# Global install targets (used if dependency has no own install_to)
 install_to:
   - .claude
-  - .agents
-# Or
-# Explicit mode configuration
-# install_to:
-#   - path: .claude
-#     mode: claude
-#   - path: .agents
-#     mode: plain
 
 dependencies:
   my-skill-pack:
     git: "https://github.com/user/pack.git"
     tag: "v1.0.0"
+    # Optional: override global install_to for this dependency
+    install_to:
+      - .cursor
+```
+
+#### Extra Config File
+
+Use `--extra` to merge additional dependencies (extra file overrides aspkg.yaml):
+
+```yaml
+# extra.yaml
+install_to:
+  - .cursor
+
+dependencies:
+  my-skill-pack:
+    git: "https://github.com/user/pack.git"
+    branch: develop
+    install_to:
+      - .cursor
+```
+
+```bash
+aspm install --extra extra.yaml
 ```
 
 ## Version Rules

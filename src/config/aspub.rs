@@ -8,6 +8,7 @@ use super::{DependencySource, InstallTargets};
 
 /// Publish project configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AspubConfig {
     /// Package name (required)
     pub name: String,

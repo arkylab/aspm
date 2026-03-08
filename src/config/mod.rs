@@ -4,15 +4,62 @@ mod aspkg;
 mod aspub;
 mod dependency;
 
-pub use aspkg::{AspkgConfig, EffectiveMode, InstallMode, InstallTarget, InstallTargets};
+pub use aspkg::AspkgConfig;
 pub use aspub::AspubConfig;
-pub use dependency::DependencySource;
+pub use dependency::{DependencySource, EffectiveMode, InstallMode, InstallTarget, InstallTargets};
 
 use anyhow::{bail, Result, Context};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Source file for a dependency
+#[derive(Debug, Clone)]
+pub enum SourceFile {
+    Aspkg,
+    Extra(PathBuf),
+}
+
+impl SourceFile {
+    #[allow(dead_code)]
+    pub fn display_name(&self) -> String {
+        match self {
+            SourceFile::Aspkg => "aspkg.yaml".to_string(),
+            SourceFile::Extra(path) => path.display().to_string(),
+        }
+    }
+}
+
+/// Resolved dependency config with flattened install_to
+#[derive(Debug, Clone)]
+pub struct ResolvedDependencyConfig {
+    pub name: String,
+    pub source: DependencySource,
+    pub install_to: InstallTargets,
+    pub source_file: SourceFile,
+    /// Whether this dependency was overridden by extra config
+    pub overridden: bool,
+}
+
+impl ResolvedDependencyConfig {
+    /// Get the git URL or path for display
+    pub fn source_display(&self) -> String {
+        match &self.source {
+            DependencySource::Simple(v) => format!("version >={}", v),
+            DependencySource::Detailed { git, path, .. } => {
+                if let Some(p) = path {
+                    format!("path:{}", p.display())
+                } else if let Some(g) = git {
+                    g.clone()
+                } else {
+                    "unknown".to_string()
+                }
+            }
+        }
+    }
+}
 
 /// Detect project type and load config
+#[allow(dead_code)]
 pub enum ConfigType {
     Publish(AspubConfig),
     Consumer(AspkgConfig),
@@ -25,6 +72,7 @@ pub enum ConfigType {
     },
 }
 
+#[allow(dead_code)]
 impl ConfigType {
     pub fn detect() -> Result<Self> {
         let has_aspub = Path::new("aspub.yaml").exists();
@@ -95,5 +143,87 @@ impl ConfigType {
             ConfigType::Consumer(config) => config.install_to.clone(),
             ConfigType::Both { consumer, .. } => consumer.install_to.clone(),
         }
+    }
+}
+
+// ── Extra config merge functions ─────────────────────────────────────────────
+
+/// Parse a config file and flatten install_to into each dependency
+pub fn parse_and_flatten(path: &Path, source_file: SourceFile) -> Result<Vec<ResolvedDependencyConfig>> {
+    let config = AspkgConfig::load(path.to_str().context("Invalid path")?)
+        .with_context(|| format!("Failed to load {}", path.display()))?;
+    
+    let global_install_to = config.install_to.clone();
+    
+    config.dependencies.into_iter().map(|(name, mut source)| {
+        // Flatten: if dependency doesn't have its own install_to, use global
+        if let DependencySource::Detailed { install_to, .. } = &mut source {
+            if install_to.is_none() {
+                *install_to = Some(global_install_to.clone());
+            }
+        }
+        
+        let install_to = source.install_to().cloned().unwrap_or_else(|| global_install_to.clone());
+        
+        Ok(ResolvedDependencyConfig {
+            name,
+            source,
+            install_to,
+            source_file: source_file.clone(),
+            overridden: false,
+        })
+    }).collect()
+}
+
+/// Merge two resolved dependency lists (extra overrides base)
+pub fn merge_resolved_dependencies(
+    base: Vec<ResolvedDependencyConfig>,
+    extra: Vec<ResolvedDependencyConfig>,
+) -> Vec<ResolvedDependencyConfig> {
+    let mut map: HashMap<String, ResolvedDependencyConfig> = HashMap::new();
+    
+    // Insert base dependencies
+    for dep in base {
+        map.insert(dep.name.clone(), dep);
+    }
+    
+    // Override with extra dependencies
+    for mut dep in extra {
+        // Mark as overridden if it existed in base
+        dep.overridden = map.contains_key(&dep.name);
+        map.insert(dep.name.clone(), dep);
+    }
+    
+    map.into_values().collect()
+}
+
+/// Print merge log with detailed information
+pub fn print_merge_log(deps: &[ResolvedDependencyConfig], extra_path: Option<&Path>) {
+    if extra_path.is_none() {
+        // No extra config, just print simple info
+        println!("Loaded {} dependencies from aspkg.yaml", deps.len());
+        return;
+    }
+    
+    println!("Merged dependencies:");
+    for dep in deps {
+        let source_info = match &dep.source_file {
+            SourceFile::Aspkg => "(from aspkg.yaml)".to_string(),
+            SourceFile::Extra(path) => {
+                if dep.overridden {
+                    format!("(from {}, overridden)", path.display())
+                } else {
+                    format!("(from {}, added)", path.display())
+                }
+            }
+        };
+        
+        let install_to_str: Vec<String> = dep.install_to.0.iter()
+            .map(|t| t.path.display().to_string())
+            .collect();
+        
+        println!("  {}:", dep.name);
+        println!("    source: {} {}", dep.source_display(), source_info);
+        println!("    install_to: [{}]", install_to_str.join(", "));
     }
 }
