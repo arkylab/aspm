@@ -25,19 +25,6 @@ curl -fsSL https://raw.githubusercontent.com/arkylab/aspm/main/scripts/install.s
 irm https://raw.githubusercontent.com/arkylab/aspm/main/scripts/install.ps1 | iex
 ```
 
-### Manual Download
-
-Download the latest release for your platform:
-
-| Platform | Architecture | Download |
-|----------|-------------|----------|
-| Linux | x64 | `aspm-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux | ARM64 | `aspm-aarch64-unknown-linux-gnu.tar.gz` |
-| macOS | Intel | `aspm-x86_64-apple-darwin.tar.gz` |
-| macOS | Apple Silicon | `aspm-aarch64-apple-darwin.tar.gz` |
-| Windows | x64 | `aspm-x86_64-pc-windows-msvc.zip` |
-| Windows | ARM64 | `aspm-aarch64-pc-windows-msvc.zip` |
-
 ### Build from Source
 
 ```bash

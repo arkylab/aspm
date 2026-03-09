@@ -7,6 +7,7 @@ set -e
 REPO="arkylab/aspm"
 INSTALL_DIR="$HOME/.local/bin"
 BINARY_NAME="aspm"
+VERSION=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -27,11 +28,47 @@ error() {
     exit 1
 }
 
+usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  -v, --version VERSION    Specify version to install (e.g., v1.0.0)"
+    echo "  -h, --help               Show this help message"
+    echo ""
+    echo "Environment Variables:"
+    echo "  INSTALL_VERSION          Specify version to install"
+    echo ""
+    echo "Examples:"
+    echo "  $0                       Install latest version"
+    echo "  $0 -v v1.0.0             Install version v1.0.0"
+    echo "  INSTALL_VERSION=v1.0.0 $0   Install version v1.0.0"
+    exit 0
+}
+
+# Parse command line arguments
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -v|--version)
+            if [ -z "$2" ]; then
+                error "Version argument requires a value"
+            fi
+            VERSION="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            error "Unknown option: $1. Use -h for help."
+            ;;
+    esac
+done
+
 # Detect operating system
 detect_os() {
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
     case "$OS" in
-        linux) OS="unknown-linux-gnu" ;;
+        linux) OS="unknown-linux-musl" ;;
         darwin) OS="apple-darwin" ;;
         *) error "Unsupported operating system: $OS" ;;
     esac
@@ -89,10 +126,15 @@ main() {
 
     info "Detected platform: $TARGET"
 
-    # Get version
-    VERSION="${INSTALL_VERSION:-$(get_latest_version)}"
+    # Get version (priority: CLI arg > env var > latest)
     if [ -z "$VERSION" ]; then
-        error "Failed to determine version. Please specify with INSTALL_VERSION environment variable."
+        VERSION="${INSTALL_VERSION:-}"
+    fi
+    if [ -z "$VERSION" ]; then
+        VERSION=$(get_latest_version)
+    fi
+    if [ -z "$VERSION" ]; then
+        error "Failed to determine version. Please specify with -v option or INSTALL_VERSION environment variable."
     fi
     info "Installing version: $VERSION"
 

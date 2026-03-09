@@ -2,6 +2,7 @@
 # https://github.com/arkylab/aspm
 
 param(
+    [Alias('v')]
     [string]$Version = "",
     [string]$InstallDir = ""
 )
