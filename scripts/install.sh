@@ -112,11 +112,11 @@ download() {
 # Main installation
 main() {
     echo ""
-    echo "  ___   ___  _   _ _  __"
-    echo " / _ \\ / _ \\| | | | |/ /"
-    echo "| |_| | (_) | |_| | ' / "
-    echo " \\__\\_\\\\___/ \\__,_|_|\\_\\"
-    echo "   AI Skill Package Manager"
+    echo "  _____ _____ _____ _____ "
+    echo " |  _  |   __|  _  |     |"
+    echo " |     |__   |   __| | | |"
+    echo " |__|__|_____|__|  |_|_|_|"
+    echo "  AI Skill Package Manager"
     echo ""
 
     # Detect platform

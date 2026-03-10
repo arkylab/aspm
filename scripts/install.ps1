@@ -94,11 +94,11 @@ function Add-ToPath {
 # Main installation
 function Main {
     Write-Host ""
-    Write-Host "  ___   ___  _   _ _  __"
-    Write-Host " / _ \ / _ \| | | | |/ /"
-    Write-Host "| |_| | (_) | |_| | ' / "
-    Write-Host " \__\_\___/ \__,_|_|\_\"
-    Write-Host "   AI Skill Package Manager"
+    Write-Host "  _____ _____ _____ _____ "
+    Write-Host " |  _  |   __|  _  |     |"
+    Write-Host " |     |__   |   __| | | |"
+    Write-Host " |__|__|_____|__|  |_|_|_|"
+    Write-Host "  AI Skill Package Manager"
     Write-Host ""
 
     # Detect platform
