@@ -22,13 +22,24 @@ struct MarketplacePlugin {
 pub struct PluginMeta {
     pub package_name: String,
     pub version: String,
-    pub git_url: Option<String>,
+    pub owner_name: Option<String>,
+    pub owner_email: Option<String>,
 }
 
 impl PluginMeta {
     /// Create plugin meta from dependency info
-    pub fn new(package_name: String, version: String, git_url: Option<String>) -> Self {
-        Self { package_name, version, git_url }
+    pub fn new(
+        package_name: String,
+        version: String,
+        owner_name: Option<String>,
+        owner_email: Option<String>,
+    ) -> Self {
+        Self {
+            package_name,
+            version,
+            owner_name,
+            owner_email,
+        }
     }
 }
 
@@ -58,10 +69,17 @@ fn generate_plugin_meta(pkg_dir: &Path, meta: &PluginMeta) -> Result<()> {
     let description = format!("Auto-generated for {} by aspm", meta.package_name);
     let marketplace_name = format!("{}-dev", meta.package_name);
     
+    let owner_name = meta.owner_name.as_deref().unwrap_or("unknown");
+    let owner_email = meta.owner_email.as_deref().unwrap_or("unknown@unknown.unknown");
+    
     // Generate marketplace.json
-    let mut marketplace = serde_json::json!({
+    let marketplace = serde_json::json!({
         "name": &marketplace_name,
         "description": &description,
+        "owner": {
+            "name": owner_name,
+            "email": owner_email
+        },
         "plugins": [
             {
                 "name": &meta.package_name,
@@ -73,19 +91,15 @@ fn generate_plugin_meta(pkg_dir: &Path, meta: &PluginMeta) -> Result<()> {
     });
     
     // Generate plugin.json
-    let mut plugin = serde_json::json!({
+    let plugin = serde_json::json!({
         "name": &meta.package_name,
         "description": &description,
-        "version": &meta.version
+        "version": &meta.version,
+        "author": {
+            "name": owner_name,
+            "email": owner_email
+        }
     });
-    
-    // Add homepage/repository if git URL available
-    if let Some(ref url) = meta.git_url {
-        marketplace["homepage"] = Value::String(url.clone());
-        marketplace["repository"] = Value::String(url.clone());
-        plugin["homepage"] = Value::String(url.clone());
-        plugin["repository"] = Value::String(url.clone());
-    }
     
     // Write files
     let marketplace_path = plugin_dir.join("marketplace.json");

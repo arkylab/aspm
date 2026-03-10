@@ -57,6 +57,9 @@ dependencies:
   my-skill-pack:
     git: "https://github.com/user/my-skill-pack.git"
     tag: "v1.0.0"
+  test-skill:
+    git: "https://github.com/user/test-skill.git"
+    branch: "main"
 ```
 
 #### Install Dependencies

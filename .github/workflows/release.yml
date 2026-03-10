@@ -160,7 +160,7 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/arkylab/aspm/main/scripts/install.sh | sh -s -- -v ${VERSION}
 
           # Windows (PowerShell)
-          irm https://raw.githubusercontent.com/arkylab/aspm/main/scripts/install.ps1 | iex -v ${VERSION}
+          iex "& { $(irm https://raw.githubusercontent.com/arkylab/aspm/main/scripts/install.ps1) } -v ${VERSION}"
           \`\`\`
           
           EOF

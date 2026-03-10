@@ -16,9 +16,22 @@ use crate::cli::Commands;
 fn main() -> Result<()> {
     let cli = cli::Cli::parse();
 
+    if cli.version {
+        cli::handle_version();
+        return Ok(());
+    }
+
     match cli.command {
-        Commands::Init(args) => cli::handle_init(args),
-        Commands::Install(args) => cli::handle_install(args),
-        Commands::Cache(args) => cli::handle_cache(args),
+        Some(Commands::Init(args)) => cli::handle_init(args),
+        Some(Commands::Install(args)) => cli::handle_install(args),
+        Some(Commands::Cache(args)) => cli::handle_cache(args),
+        Some(Commands::Version) => {
+            cli::handle_version();
+            Ok(())
+        }
+        None => {
+            cli::Cli::parse_from(["aspm", "--help"]);
+            Ok(())
+        }
     }
 }

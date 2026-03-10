@@ -13,8 +13,12 @@ use crate::resolver::DependencyResolver;
 #[command(name = "aspm")]
 #[command(about = "AI Skill Package Manager", long_about = None)]
 pub struct Cli {
+    /// Show version
+    #[arg(short = 'V', long = "version")]
+    pub version: bool,
+
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -25,6 +29,8 @@ pub enum Commands {
     Install(InstallArgs),
     /// Manage cache
     Cache(CacheArgs),
+    /// Show version
+    Version,
 }
 
 #[derive(Parser)]
@@ -293,4 +299,8 @@ pub fn handle_cache(args: CacheArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn handle_version() {
+    println!("{}", env!("CARGO_PKG_VERSION"));
 }

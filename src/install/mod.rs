@@ -405,7 +405,7 @@ impl Installer {
         // Prepare auto-generation metadata (only if no existing .claude-plugin)
         if !has_claude_plugin {
             let version = Self::extract_version(dep);
-            let auto_meta = PluginMeta::new(dep.name.clone(), version, dep.git_url.clone());
+            let auto_meta = PluginMeta::new(dep.name.clone(), version, None, None);
 
             // Update settings.local.json with auto-generated metadata
             let settings_path = target_dir.join("settings.local.json");
@@ -459,7 +459,7 @@ impl Installer {
 
         // Auto-generate .claude-plugin
         let version = Self::extract_version(dep);
-        let auto_meta = PluginMeta::new(dep.name.clone(), version, dep.git_url.clone());
+        let auto_meta = PluginMeta::new(dep.name.clone(), version, None, None);
 
         let settings_path = target_dir.join("settings.local.json");
         settings::register_plugin(&settings_path, dst, &plugins_dir, Some(&auto_meta))?;
