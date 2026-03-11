@@ -61,7 +61,7 @@ fn read_marketplace_meta(pkg_dir: &Path) -> Result<Option<(String, Vec<String>)>
     Ok(Some((meta.name, plugin_names)))
 }
 
-/// Generate .claude-plugin/marketplace.json and plugin.json files
+/// Generate .claude-plugin/marketplace.json file
 fn generate_plugin_meta(pkg_dir: &Path, meta: &PluginMeta) -> Result<()> {
     let plugin_dir = pkg_dir.join(".claude-plugin");
     fs::create_dir_all(&plugin_dir)?;
@@ -90,23 +90,9 @@ fn generate_plugin_meta(pkg_dir: &Path, meta: &PluginMeta) -> Result<()> {
         ]
     });
     
-    // Generate plugin.json
-    let plugin = serde_json::json!({
-        "name": &meta.package_name,
-        "description": &description,
-        "version": &meta.version,
-        "author": {
-            "name": owner_name,
-            "email": owner_email
-        }
-    });
-    
-    // Write files
+    // Write file
     let marketplace_path = plugin_dir.join("marketplace.json");
-    let plugin_path = plugin_dir.join("plugin.json");
-    
     fs::write(&marketplace_path, serde_json::to_string_pretty(&marketplace)?)?;
-    fs::write(&plugin_path, serde_json::to_string_pretty(&plugin)?)?;
     
     Ok(())
 }

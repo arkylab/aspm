@@ -16,6 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::{AspubConfig, EffectiveMode, InstallTarget};
+use crate::git::GitManager;
 use crate::publish::resolve_all_publish_paths;
 use crate::resolver::ResolvedDependency;
 
@@ -405,7 +406,10 @@ impl Installer {
         // Prepare auto-generation metadata (only if no existing .claude-plugin)
         if !has_claude_plugin {
             let version = Self::extract_version(dep);
-            let auto_meta = PluginMeta::new(dep.name.clone(), version, None, None);
+            let (owner_name, owner_email) = GitManager::get_last_commit_author(repo_path)
+                .map(|(n, e)| (Some(n), Some(e)))
+                .unwrap_or((None, None));
+            let auto_meta = PluginMeta::new(dep.name.clone(), version, owner_name, owner_email);
 
             // Update settings.local.json with auto-generated metadata
             let settings_path = target_dir.join("settings.local.json");
@@ -459,7 +463,10 @@ impl Installer {
 
         // Auto-generate .claude-plugin
         let version = Self::extract_version(dep);
-        let auto_meta = PluginMeta::new(dep.name.clone(), version, None, None);
+        let (owner_name, owner_email) = GitManager::get_last_commit_author(repo_path)
+            .map(|(n, e)| (Some(n), Some(e)))
+            .unwrap_or((None, None));
+        let auto_meta = PluginMeta::new(dep.name.clone(), version, owner_name, owner_email);
 
         let settings_path = target_dir.join("settings.local.json");
         settings::register_plugin(&settings_path, dst, &plugins_dir, Some(&auto_meta))?;

@@ -363,6 +363,17 @@ impl GitManager {
         let remote = repo.find_remote("origin")?;
         Ok(remote.url().map(|s| s.to_string()))
     }
+    
+    /// Get last commit author (name, email) from a repository path
+    pub fn get_last_commit_author(repo_path: &std::path::Path) -> Option<(String, String)> {
+        let repo = Repository::open(repo_path).ok()?;
+        let head = repo.head().ok()?;
+        let commit = head.peel_to_commit().ok()?;
+        let author = commit.author();
+        let name = author.name()?.to_string();
+        let email = author.email()?.to_string();
+        Some((name, email))
+    }
 }
 
 impl Default for GitManager {
