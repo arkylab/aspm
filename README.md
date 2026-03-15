@@ -66,17 +66,33 @@ dependencies:
 
 ```bash
 aspm install
+# After running `aspm install`, all dependencies are ready.
 ```
+
+**✅ That's all you need to do as a skill consumer**
 
 ### Creating a Publish Project (If you are a skill provider)
 
 Publish projects allow you to share your AI resources with others.
 
+**Supported Repository Formats:**
+
+| Format | Description | Recommended |
+|--------|-------------|-------------|
+| **aspm Format** | Repository with `aspub.yaml` at root | ✅ Yes |
+| **Claude Plugin Format** | Repository with `skills/`, `agents/`, etc. directories at root | ⚠️ No |
+| **Single Skill Format** | Repository with only `SKILL.md` at root | ⚠️ No |
+
+aspm recommends the **aspm Format** because it provides:
+- ✅ Explicit control over what gets published
+- ✅ Support for transitive dependencies
+- ✅ Automatic dependency resolution
+
 ```bash
 # Initialize a publish project
 aspm init my-skill-pack
-
-# This creates aspub.yaml (publish configuration)
+# This creates aspub.yaml (publish configuration).
+# aspub.yaml and aspkg.yaml can coexist in the same project - one for publishing your own resources, one for consuming dependencies.
 ```
 
 #### Configure aspub.yaml
@@ -154,14 +170,13 @@ Regex is auto-detected when path contains metacharacters: `^ $ . * + ? [ ] ( ) {
 
 ## Supported Repository Formats
 
-aspm supports two repository formats:
+aspm supports three repository formats:
 
 ### 1. aspm Format (Recommended)
 
 Repositories with `aspub.yaml` at root. This is the recommended format because:
 
 - ✅ Explicit control over what gets published
-- ✅ Clear package metadata (name, version, description)
 - ✅ Support for selective publishing (only specified resources)
 - ✅ Transitive dependency support
 
@@ -171,6 +186,8 @@ Repositories without `aspub.yaml` but with resource directories at root:
 
 ```
 superpowers/
+├── .claude-plugin/
+│   └── marketplace.json
 ├── skills/
 │   └── brainstorming/
 │       └── SKILL.md
@@ -180,8 +197,6 @@ superpowers/
 └── rules/
 ```
 
-Supported directories: `skills`, `agents`, `commands`, `hooks`, `rules`
-
 #### Installing Claude Code Plugins
 
 ```yaml
@@ -189,10 +204,12 @@ Supported directories: `skills`, `agents`, `commands`, `hooks`, `rules`
 dependencies:
   superpowers:
     git: "https://github.com/obra/superpowers.git"
-    tag: "v4.1.1"
+    branch: "main"
 ```
 
-**Note:** If the repository has only a `SKILL.md` file (no standard directories), aspm auto-wraps it in a `skills/` directory structure.
+### 3. Single Skill Format
+
+Repositories with only a `SKILL.md` file at root (no standard directories). aspm auto-wraps it in a `skills/` directory structure during installation.
 
 ## Install Modes
 
@@ -210,6 +227,8 @@ Copies resources to `<target>/<type>/<pkg>/`:
 └── commands/
 ```
 
+**Note:** Supported directories: `skills`, `agents`, `commands`, `hooks`, `rules`
+
 ### Claude Mode
 
 Copies entire repo to `<target>/-plugins/<pkg>/` and updates `settings.local.json`:
@@ -218,12 +237,13 @@ Copies entire repo to `<target>/-plugins/<pkg>/` and updates `settings.local.jso
 .claude/
 ├── -plugins/
 │   └── my-pack/
-│       ├── skills/
-│       └── .claude-plugin/marketplace.json
+│       ├── .claude-plugin/
+│       │   └── marketplace.json
+│       └── skills/
 └── settings.local.json
 ```
 
-**Note:** If the source repository lacks `.claude-plugin/marketplace.json`, aspm auto-generates it with the package name as marketplace name (suffixed with `-dev`) and plugin name.
+**Note:** If the source repository lacks `.claude-plugin/marketplace.json`, aspm auto-generates it with the package name as marketplace name (suffixed with `-dev`).
 
 ### Mode Configuration
 
@@ -234,30 +254,43 @@ install_to:
   - .agents
 # Or
 # Explicit mode configuration
-install_to:
-  - path: .claude
-    mode: claude
-  - path: .agents
-    mode: plain
+# install_to:
+#   - path: .claude
+#     mode: claude
+#   - path: .agents
+#     mode: plain
+
+dependencies:
+  superpowers:
+    git: "https://github.com/obra/superpowers.git"
+    branch: "main"
 ```
 
 ## Installation Directory Structure
 
-All packages are installed with namespace isolation to prevent conflicts:
+All packages are installed with namespace isolation to prevent conflicts. Example with `install_to: [.claude, .agents]`:
 
 ```
-.claude/
+.claude/                          # Claude mode (auto-detected)
+├── -plugins/
+│   └── superpowers/              # Package name
+│       ├── commands/
+│       ├── skills/
+│       │   ├── brainstorming/
+│       │   │   └── SKILL.md
+│       │   └── writing-plans/
+│       │       └── SKILL.md
+│       └── .claude-plugin/
+│           └── marketplace.json
+└── settings.local.json           # Updated with plugin paths
+
+.agents/                          # Plain mode (auto-detected)
 ├── skills/
-│   ├── superpowers/        # Package name as subdirectory
-│   │   ├── brainstorming/
-│   │   │   └── SKILL.md
-│   │   └── writing-plans/
-│   │   │   └── SKILL.md
-│   └── my-skill-pack/      # Another package
-│       └── brainstorming/
+│   └── superpowers/              # Package name as subdirectory
+│       ├── brainstorming/
+│       │   └── SKILL.md
+│       └── writing-plans/
 │           └── SKILL.md
-├── agents/
-│   └── superpowers/
 └── commands/
     └── superpowers/
 ```
@@ -271,9 +304,11 @@ aspm init --consumer          # Create a consumer project
 
 # Dependency Management
 aspm install                  # Install all dependencies
-aspm install --to <dir>       # Install to specific directory
-aspm install --extra <file>   # Merge extra config (overrides aspkg.yaml)
-aspm install --extra local.yaml --to .cursor  # Combined options
+aspm install --to <dir>       # Install to specific directory (overrides install_to config in aspkg.yaml and extra yaml)
+aspm install --to .claude --to .cursor::plain  # Multiple targets with mode override
+aspm install --extra <file>   # Merge extra config (overrides same dependencies in aspkg.yaml)
+aspm install --aspkg <file>   # Use custom aspkg.yaml path
+aspm install --extra local.yaml --to .cursor --aspkg ./config/aspkg.yaml  # Combined options
 
 # Cache Management
 aspm cache clean              # Clear all cached repositories
@@ -372,13 +407,6 @@ dependencies:
     git: "https://..."
     commit: "a1b2c3d4" # Exact commit
 ```
-
-## Why Use aspub Format?
-
-| Feature | aspub Format | Claude Plugin Format |
-|---------|-------------|---------------------|
-| Transitive dependencies | ✅ Automatic | ❌ Not supported |
-| Dependency resolution | ✅ Automatic conflict resolution | ❌ Manual |
 
 ## License
 

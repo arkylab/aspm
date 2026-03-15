@@ -49,13 +49,19 @@ pub struct InitArgs {
 
 #[derive(Parser)]
 pub struct InstallArgs {
-    /// Install to specified directory
-    #[arg(long)]
-    pub to: Option<PathBuf>,
+    /// Install to specified directories (can be used multiple times)
+    /// Format: <path> or <path>::<mode> (mode: plain|claude)
+    /// Examples: --to .claude --to .cursor::plain
+    #[arg(long, value_name = "TARGET")]
+    pub to: Vec<String>,
     
     /// Extra dependencies config file (dependencies in this file will override aspkg.yaml)
     #[arg(long)]
     pub extra: Option<PathBuf>,
+    
+    /// Path to aspkg.yaml (default: ./aspkg.yaml)
+    #[arg(long)]
+    pub aspkg: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -75,6 +81,30 @@ pub enum CacheAction {
 }
 
 // Command handlers
+
+/// Parse a single --to argument into InstallTarget
+/// Format: <path> or <path>::<mode>
+fn parse_install_target(value: &str) -> Result<InstallTarget> {
+    let parts: Vec<&str> = value.splitn(2, "::").collect();
+    let path = PathBuf::from(parts[0].trim());
+    
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("path cannot be empty");
+    }
+    
+    let mode = if parts.len() == 1 || parts[1].is_empty() {
+        InstallMode::Auto
+    } else {
+        match parts[1].to_lowercase().as_str() {
+            "plain" => InstallMode::Plain,
+            "claude" => InstallMode::Claude,
+            other => anyhow::bail!("invalid mode '{}', expected 'plain' or 'claude'", other),
+        }
+    };
+    
+    Ok(InstallTarget::new(path, mode))
+}
+
 
 pub fn handle_init(args: InitArgs) -> Result<()> {
     if args.name.is_none() && !args.consumer {
@@ -102,15 +132,28 @@ pub fn handle_init(args: InitArgs) -> Result<()> {
 }
 
 pub fn handle_install(args: InstallArgs) -> Result<()> {
-    // Check if aspkg.yaml exists
-    let aspkg_path = std::path::Path::new("aspkg.yaml");
+    // Get current working directory as project root
+    let project_root = std::env::current_dir()?;
+    
+    // Determine aspkg.yaml path (convert relative to absolute if needed)
+    let aspkg_path = match args.aspkg {
+        Some(ref path) => {
+            if path.is_absolute() {
+                path.clone()
+            } else {
+                project_root.join(path)
+            }
+        }
+        None => project_root.join("aspkg.yaml"),
+    };
     if !aspkg_path.exists() {
-        anyhow::bail!("No aspkg.yaml found. Run 'aspm init --consumer' first.");
+        anyhow::bail!("No aspkg.yaml found at {}. Run 'aspm init --consumer' first.", 
+            aspkg_path.display());
     }
 
     // 1. Parse and flatten aspkg.yaml
     println!("Reading config from {}...", aspkg_path.display());
-    let base_deps = parse_and_flatten(aspkg_path, SourceFile::Aspkg)?;
+    let base_deps = parse_and_flatten(&aspkg_path, SourceFile::Aspkg)?;
 
     // 2. Parse and flatten extra.yaml (if provided)
     let extra_deps = if let Some(extra_path) = &args.extra {
@@ -128,7 +171,8 @@ pub fn handle_install(args: InstallArgs) -> Result<()> {
     let merged_deps = merge_resolved_dependencies(base_deps, extra_deps);
 
     // 4. Check for aspub.yaml and merge install_to / check conflicts
-    let aspub_path = std::path::Path::new("aspub.yaml");
+    // aspub.yaml is always looked up in the current working directory
+    let aspub_path = project_root.join("aspub.yaml");
     let aspub_config = if aspub_path.exists() {
         println!("Reading config from {}...", aspub_path.display());
         Some(AspubConfig::load(aspub_path.to_str().unwrap())?)
@@ -203,14 +247,19 @@ pub fn handle_install(args: InstallArgs) -> Result<()> {
         }
     }
 
-    // 12. Handle --to override (if specified, all deps install to that directory)
-    if let Some(to) = &args.to {
-        println!("Overriding install target to: {}", to.display());
-        let override_targets = InstallTargets(vec![InstallTarget::new(to.clone(), InstallMode::Auto)]);
+    // 12. Handle --to override (if specified, all deps install to those directories)
+    if !args.to.is_empty() {
+        let override_targets: InstallTargets = InstallTargets(
+            args.to.iter()
+                .map(|s| parse_install_target(s))
+                .collect::<Result<Vec<_>>>()?
+        );
+        println!("Overriding install targets to: {:?}", override_targets.0);
         for dep in &mut resolved_deps {
             dep.install_to = Some(override_targets.clone());
         }
     }
+
 
     // 13. Collect all target directories for pruning
     let all_targets: std::collections::HashSet<_> = resolved_deps
@@ -226,8 +275,6 @@ pub fn handle_install(args: InstallArgs) -> Result<()> {
     // 14. Prune old packages from all target directories
     println!("Pruning old packages...");
     let keep: std::collections::HashSet<String> = resolved_deps.iter().map(|d| d.name.clone()).collect();
-    // Project root is the directory containing aspkg.yaml
-    let project_root = aspkg_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
     for target_path in &all_targets {
         let installer = Installer::new(vec![InstallTarget::new(target_path.clone(), InstallMode::Auto)]);
         installer.prune(&keep, &project_root)?;
