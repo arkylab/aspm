@@ -51,14 +51,11 @@ aspm init --consumer
 ```yaml
 # Installation target directory
 install_to: 
-  - .claude
+  - .claude    # Install to Claude Code plugin directory
 
 dependencies:
-  my-skill-pack:
-    git: "https://github.com/user/my-skill-pack.git"
-    tag: "v1.0.0"
-  test-skill:
-    git: "https://github.com/user/test-skill.git"
+  superpowers:
+    git: "https://github.com/obra/superpowers.git"
     branch: "main"
 ```
 
@@ -66,7 +63,7 @@ dependencies:
 
 ```bash
 aspm install
-# After running `aspm install`, all dependencies are ready.
+# After running `aspm install`, all dependencies are ready. If you are using Claude Code, you can now restart Claude code to load the new skills. Sometimes, you may need to restart it twice.
 ```
 
 **✅ That's all you need to do as a skill consumer**
@@ -303,12 +300,19 @@ aspm init <name>              # Create a publish project
 aspm init --consumer          # Create a consumer project
 
 # Dependency Management
-aspm install                  # Install all dependencies
-aspm install --to <dir>       # Install to specific directory (overrides install_to config in aspkg.yaml and extra yaml)
-aspm install --to .claude --to .cursor::plain  # Multiple targets with mode override
-aspm install --extra <file>   # Merge extra config (overrides same dependencies in aspkg.yaml)
+aspm install                                                # Install all dependencies
+aspm install --to <dir>       # Install to specific directory
+aspm install --extra <file>   # Merge extra config
 aspm install --aspkg <file>   # Use custom aspkg.yaml path
 aspm install --extra local.yaml --to .cursor --aspkg ./config/aspkg.yaml  # Combined options
+aspm add <name> --git <url>                        # Add dependency (auto-detect default branch)
+aspm add <name> --git <url> [--branch | --tag | --commit] <ref>  # Add with specific branch or tag or commit
+aspm add <name> --git <url> --aspkg <file>          # Add to specific aspkg.yaml
+aspm add <name> --git <url> --aspub                 # Add to aspub.yaml
+aspm add <name> --git <url> --overwrite             # Overwrite existing dependency
+aspm remove <name>            # Remove dependency
+aspm remove <name> --aspkg <file>  # Remove from specific aspkg.yaml
+aspm remove <name> --aspub         # Remove from aspub.yaml
 
 # Cache Management
 aspm cache clean              # Clear all cached repositories

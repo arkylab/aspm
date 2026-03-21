@@ -230,9 +230,11 @@ impl DependencyResolver {
                         RefType::Branch => (None, Some(best.name), Some(commit)),
                     }
                 } else {
-                    // No specific ref, use default branch
-                    let head = GitManager::get_head_commit(&repo)?;
-                    (None, None, Some(head))
+                    // No specific ref, detect and use default branch
+                    let default_branch = GitManager::get_default_branch(&repo)?;
+                    GitManager::checkout_branch(&repo, &default_branch)?;
+                    let commit = GitManager::get_head_commit(&repo)?;
+                    (None, Some(default_branch), Some(commit))
                 };
                 
                 // Read aspub.yaml to get transitive dependencies

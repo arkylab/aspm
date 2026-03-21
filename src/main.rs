@@ -25,6 +25,8 @@ fn main() -> Result<()> {
         Some(Commands::Init(args)) => cli::handle_init(args),
         Some(Commands::Install(args)) => cli::handle_install(args),
         Some(Commands::Cache(args)) => cli::handle_cache(args),
+        Some(Commands::Add(args)) => cli::handle_add(args),
+        Some(Commands::Remove(args)) => cli::handle_remove(args),
         Some(Commands::Version) => {
             cli::handle_version();
             Ok(())

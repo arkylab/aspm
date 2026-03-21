@@ -29,6 +29,10 @@ pub enum Commands {
     Install(InstallArgs),
     /// Manage cache
     Cache(CacheArgs),
+    /// Add a dependency
+    Add(AddArgs),
+    /// Remove a dependency
+    Remove(RemoveArgs),
     /// Show version
     Version,
 }
@@ -78,6 +82,54 @@ pub enum CacheAction {
     Dir,
     /// List cached repositories
     List,
+}
+
+#[derive(Parser)]
+pub struct AddArgs {
+    /// Dependency name
+    pub name: String,
+    
+    /// Git repository URL
+    #[arg(long)]
+    pub git: String,
+    
+    /// Branch name
+    #[arg(long, group = "ref")]
+    pub branch: Option<String>,
+    
+    /// Tag name
+    #[arg(long, group = "ref")]
+    pub tag: Option<String>,
+    
+    /// Commit hash
+    #[arg(long, group = "ref")]
+    pub commit: Option<String>,
+    
+    /// Overwrite existing dependency
+    #[arg(long)]
+    pub overwrite: bool,
+    
+    /// Path to aspkg.yaml
+    #[arg(long, group = "config")]
+    pub aspkg: Option<PathBuf>,
+    
+    /// Use aspub.yaml in current directory
+    #[arg(long, group = "config")]
+    pub aspub: bool,
+}
+
+#[derive(Parser)]
+pub struct RemoveArgs {
+    /// Dependency name to remove
+    pub name: String,
+    
+    /// Path to aspkg.yaml
+    #[arg(long, group = "config")]
+    pub aspkg: Option<PathBuf>,
+    
+    /// Use aspub.yaml in current directory
+    #[arg(long, group = "config")]
+    pub aspub: bool,
 }
 
 // Command handlers
@@ -350,4 +402,171 @@ pub fn handle_cache(args: CacheArgs) -> Result<()> {
 
 pub fn handle_version() {
     println!("{}", env!("CARGO_PKG_VERSION"));
+}
+
+/// Determine the configuration file path based on arguments
+enum ConfigType {
+    Aspkg(PathBuf),
+    Aspub(PathBuf),
+}
+
+fn detect_config_path(aspkg: Option<&PathBuf>, aspub: bool) -> Result<ConfigType> {
+    // Check mutual exclusivity
+    if aspkg.is_some() && aspub {
+        anyhow::bail!("Cannot use both --aspkg and --aspub");
+    }
+    
+    // If --aspkg is specified
+    if let Some(path) = aspkg {
+        if !path.exists() {
+            anyhow::bail!("Configuration file not found: {}", path.display());
+        }
+        return Ok(ConfigType::Aspkg(path.clone()));
+    }
+    
+    // If --aspub is specified
+    if aspub {
+        let path = std::path::PathBuf::from("aspub.yaml");
+        if !path.exists() {
+            anyhow::bail!("No aspub.yaml found in current directory");
+        }
+        return Ok(ConfigType::Aspub(path));
+    }
+    
+    // Auto-detect: prefer aspkg.yaml, then aspub.yaml
+    let aspkg_path = std::path::PathBuf::from("aspkg.yaml");
+    if aspkg_path.exists() {
+        return Ok(ConfigType::Aspkg(aspkg_path));
+    }
+    
+    let aspub_path = std::path::PathBuf::from("aspub.yaml");
+    if aspub_path.exists() {
+        return Ok(ConfigType::Aspub(aspub_path));
+    }
+    
+    anyhow::bail!(
+        "No configuration file found. Run 'aspm init --consumer' or 'aspm init <name>' first."
+    );
+}
+
+pub fn handle_add(args: AddArgs) -> Result<()> {
+    use crate::config::DependencySource;
+    
+    // Determine config file path
+    let config_type = detect_config_path(args.aspkg.as_ref(), args.aspub)?;
+    
+    match config_type {
+        ConfigType::Aspkg(path) => {
+            // Load aspkg.yaml
+            let mut config = AspkgConfig::load(path.to_str().unwrap())?;
+            
+            // Check if dependency already exists
+            if config.dependencies.contains_key(&args.name) && !args.overwrite {
+                anyhow::bail!(
+                    "Dependency '{}' already exists. Use --overwrite to replace it.",
+                    args.name
+                );
+            }
+            
+            // Create dependency source
+            let source = DependencySource::Detailed {
+                git: Some(args.git.clone()),
+                version: None,
+                tag: args.tag.clone(),
+                branch: args.branch.clone(),
+                commit: args.commit.clone(),
+                path: None,
+                install_to: None,
+            };
+            
+            // Add dependency
+            config.dependencies.insert(args.name.clone(), source);
+            
+            // Save config
+            config.save(path.to_str().unwrap())?;
+            
+            println!(
+                "Dependency '{}' added to {}",
+                args.name,
+                path.display()
+            );
+        }
+        ConfigType::Aspub(path) => {
+            // Load aspub.yaml
+            let mut config = AspubConfig::load(path.to_str().unwrap())?;
+            
+            // Check if dependency already exists
+            if config.dependencies.contains_key(&args.name) && !args.overwrite {
+                anyhow::bail!(
+                    "Dependency '{}' already exists. Use --overwrite to replace it.",
+                    args.name
+                );
+            }
+            
+            // Create dependency source
+            let source = DependencySource::Detailed {
+                git: Some(args.git.clone()),
+                version: None,
+                tag: args.tag.clone(),
+                branch: args.branch.clone(),
+                commit: args.commit.clone(),
+                path: None,
+                install_to: None,
+            };
+            
+            // Add dependency
+            config.dependencies.insert(args.name.clone(), source);
+            
+            // Save config
+            config.save(path.to_str().unwrap())?;
+            
+            println!(
+                "Dependency '{}' added to {}",
+                args.name,
+                path.display()
+            );
+        }
+    }
+    
+    Ok(())
+}
+
+pub fn handle_remove(args: RemoveArgs) -> Result<()> {
+    // Determine config file path
+    let config_type = detect_config_path(args.aspkg.as_ref(), args.aspub)?;
+    
+    match config_type {
+        ConfigType::Aspkg(path) => {
+            // Load aspkg.yaml
+            let mut config = AspkgConfig::load(path.to_str().unwrap())?;
+            
+            // Remove dependency (silently ignore if not exists)
+            if config.dependencies.remove(&args.name).is_some() {
+                // Save config
+                config.save(path.to_str().unwrap())?;
+                println!(
+                    "Dependency '{}' removed from {}",
+                    args.name,
+                    path.display()
+                );
+            }
+        }
+        ConfigType::Aspub(path) => {
+            // Load aspub.yaml
+            let mut config = AspubConfig::load(path.to_str().unwrap())?;
+            
+            // Remove dependency (silently ignore if not exists)
+            if config.dependencies.remove(&args.name).is_some() {
+                // Save config
+                config.save(path.to_str().unwrap())?;
+                println!(
+                    "Dependency '{}' removed from {}",
+                    args.name,
+                    path.display()
+                );
+            }
+        }
+    }
+    
+    Ok(())
 }

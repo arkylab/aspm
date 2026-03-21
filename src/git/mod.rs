@@ -265,6 +265,25 @@ impl GitManager {
         Ok(commit.id().to_string())
     }
     
+    /// Get the default branch name from a repository
+    /// Tries to read origin/HEAD symbolic reference, falls back to "main"
+    pub fn get_default_branch(repo: &Repository) -> Result<String> {
+        // Try to find origin/HEAD reference
+        // This is a symbolic reference like: refs/remotes/origin/HEAD -> refs/remotes/origin/main
+        if let Ok(head_ref) = repo.find_reference("refs/remotes/origin/HEAD") {
+            // Try to get the symbolic target
+            if let Some(target) = head_ref.symbolic_target() {
+                // target is like "refs/remotes/origin/main"
+                if let Some(branch_name) = target.strip_prefix("refs/remotes/origin/") {
+                    return Ok(branch_name.to_string());
+                }
+            }
+        }
+        
+        // Fallback to "main" if we can't determine the default branch
+        Ok("main".to_string())
+    }
+    
     /// List all tags in the repository
     pub fn list_tags(repo: &Repository) -> Result<Vec<String>> {
         let mut tags = Vec::new();
