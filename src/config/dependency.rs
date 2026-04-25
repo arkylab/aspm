@@ -26,10 +26,11 @@ macro_rules! field_validator {
 /// Install mode for a target directory
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstallMode {
-    /// Auto-detect: use Claude mode if path ends with `.claude`, otherwise Plain
+    /// Auto-detect: use Claude mode if path ends with `.claude`, Compatible if `.qwen`, otherwise Plain
     Auto,
     Plain,
     Claude,
+    Compatible,
 }
 
 impl Default for InstallMode {
@@ -43,6 +44,7 @@ impl Default for InstallMode {
 pub enum EffectiveMode {
     Plain,
     Claude,
+    Compatible,
 }
 
 /// A single install target with path and optional mode override
@@ -62,9 +64,12 @@ impl InstallTarget {
         match self.mode {
             InstallMode::Plain => EffectiveMode::Plain,
             InstallMode::Claude => EffectiveMode::Claude,
+            InstallMode::Compatible => EffectiveMode::Compatible,
             InstallMode::Auto => {
                 if self.path.file_name().map(|n| n == ".claude").unwrap_or(false) {
                     EffectiveMode::Claude
+                } else if self.path.file_name().map(|n| n == ".qwen").unwrap_or(false) {
+                    EffectiveMode::Compatible
                 } else {
                     EffectiveMode::Plain
                 }
@@ -125,10 +130,11 @@ impl<'de> Deserialize<'de> for InstallTarget {
                 let install_mode = match mode.as_deref() {
                     Some("plain") => InstallMode::Plain,
                     Some("claude") => InstallMode::Claude,
+                    Some("compatible") => InstallMode::Compatible,
                     None => InstallMode::Auto,
                     Some(other) => {
                         return Err(de::Error::custom(format!(
-                            "unknown install mode '{}', expected 'plain' or 'claude'",
+                            "unknown install mode '{}', expected 'plain', 'claude' or 'compatible'",
                             other
                         )));
                     }
@@ -163,6 +169,12 @@ impl Serialize for InstallTarget {
                 let mut map = serializer.serialize_map(Some(2))?;
                 map.serialize_entry("path", self.path.to_str().unwrap_or(".aspm"))?;
                 map.serialize_entry("mode", "claude")?;
+                map.end()
+            }
+            InstallMode::Compatible => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("path", self.path.to_str().unwrap_or(".aspm"))?;
+                map.serialize_entry("mode", "compatible")?;
                 map.end()
             }
         }

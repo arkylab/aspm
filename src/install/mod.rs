@@ -5,9 +5,10 @@
 //! 2. Claude plugin format: has skills/agents/commands/hooks/rules directories
 //! 3. Single SKILL.md format: only has a SKILL.md file, auto-wraps in skills/ directory
 //!
-//! Supports two install modes per target directory:
+//! Supports three install modes per target directory:
 //! - Plain: copies resources to <target>/<type>/<pkg>/
-//! - Claude: copies package wholesale to <target>/-plugins/<pkg>/, updates settings.local.json
+//! - Claude: copies package wholesale to <target>/_plugins/<pkg>/, updates settings.local.json
+//! - Compatible: copies resources to <target>/<type>/ (no package name layer, except SingleSkill)
 
 mod settings;
 
@@ -26,7 +27,7 @@ use settings::PluginMeta;
 const RESOURCE_TYPES: [&str; 5] = ["skills", "agents", "commands", "hooks", "rules"];
 
 /// Directory name for Claude plugin mode installations
-pub const PLUGINS_DIR: &str = "-plugins";
+pub const PLUGINS_DIR: &str = "_plugins";
 
 /// Repository format detected during installation
 #[derive(Debug, Clone)]
@@ -171,6 +172,9 @@ impl Installer {
             EffectiveMode::Claude => {
                 self.install_claude(dep, repo_path, format, &target.path)
             }
+            EffectiveMode::Compatible => {
+                self.install_compatible(dep, repo_path, format, &target.path)
+            }
         }
     }
 
@@ -305,6 +309,160 @@ impl Installer {
         self.write_marker(&dst_skill_dir)?;
         
         println!("  Installed {} -> {} (wrapped in skills/)", dep.name, dst_skill_dir.display());
+        Ok(())
+    }
+
+    // ── Compatible mode ──────────────────────────────────────────────────────────
+
+    /// Compatible mode: install resources without package name layer
+    /// Aspm/Plugin: <target>/skills/<skill>/ (no <pkg> layer)
+    /// SingleSkill: <target>/skills/<pkg>/ (keep package name, same as Plain)
+    fn install_compatible(
+        &self,
+        dep: &ResolvedDependency,
+        repo_path: &Path,
+        format: &RepoFormat,
+        target_dir: &Path,
+    ) -> Result<()> {
+        match format {
+            RepoFormat::Aspm { config, .. } => {
+                self.install_aspm_compatible(dep, repo_path, config, target_dir)
+            }
+            RepoFormat::Plugin { available_types, .. } => {
+                self.install_plugin_compatible(dep, repo_path, available_types, target_dir)
+            }
+            RepoFormat::SingleSkill { .. } => {
+                // SingleSkill keeps package name layer, same as Plain mode
+                self.install_single_skill_plain(dep, repo_path, target_dir)
+            }
+        }
+    }
+
+    fn install_aspm_compatible(
+        &self,
+        dep: &ResolvedDependency,
+        repo_path: &Path,
+        config: &AspubConfig,
+        target_dir: &Path,
+    ) -> Result<()> {
+        let Some(publish) = &config.publish else {
+            // No publish list: copy all known resource type dirs from repo root (flat)
+            for resource_type in RESOURCE_TYPES {
+                let src_type_dir = repo_path.join(resource_type);
+                if src_type_dir.is_dir() {
+                    let dst_type_dir = target_dir.join(resource_type);
+                    self.copy_subdirectories_flat(&src_type_dir, &dst_type_dir)?;
+                }
+            }
+            println!("  Installed {} -> {} (compatible mode)", dep.name, target_dir.display());
+            return Ok(());
+        };
+
+        let mut installed_count = 0;
+        for (resource_type, paths) in publish {
+            let items = resolve_all_publish_paths(paths, repo_path, resource_type)?;
+            for item in &items {
+                let dst = if item.is_dir {
+                    target_dir
+                        .join(resource_type)
+                        .join(&item.install_name)
+                } else {
+                    target_dir
+                        .join(resource_type)
+                        .join(&item.install_name)
+                };
+
+                // Check for conflicts: skip if exists
+                if dst.exists() {
+                    eprintln!(
+                        "  Warning: Skipping '{}': already exists at {}",
+                        item.install_name,
+                        dst.display()
+                    );
+                    continue;
+                }
+
+                if item.is_dir {
+                    self.copy_directory(&item.source_path, &dst)?;
+                } else {
+                    if let Some(parent) = dst.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::copy(&item.source_path, &dst)?;
+                }
+                // Write marker in each resource directory
+                if let Some(parent) = dst.parent() {
+                    self.write_marker(parent)?;
+                }
+                installed_count += 1;
+            }
+        }
+
+        println!(
+            "  Installed {} items from {} to {} (compatible mode)",
+            installed_count,
+            dep.name,
+            target_dir.display()
+        );
+        Ok(())
+    }
+
+    fn install_plugin_compatible(
+        &self,
+        dep: &ResolvedDependency,
+        repo_path: &Path,
+        available_types: &[String],
+        target_dir: &Path,
+    ) -> Result<()> {
+        let mut installed_count = 0;
+        for resource_type in available_types {
+            let src_dir = repo_path.join(resource_type);
+            if !src_dir.is_dir() {
+                continue;
+            }
+            let dst_type_dir = target_dir.join(resource_type);
+            self.copy_subdirectories_flat(&src_dir, &dst_type_dir)?;
+            for _ in fs::read_dir(&src_dir)? {
+                installed_count += 1;
+            }
+        }
+        println!(
+            "  Installed {} items from {} to {} (compatible mode)",
+            installed_count,
+            dep.name,
+            target_dir.display()
+        );
+        Ok(())
+    }
+
+    /// Copy subdirectories directly into dst_type_dir (no package name layer)
+    /// Skips items that already exist and prints a warning
+    fn copy_subdirectories_flat(&self, src: &Path, dst_type_dir: &Path) -> Result<()> {
+        fs::create_dir_all(dst_type_dir)?;
+
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let item_name = entry.file_name().to_string_lossy().to_string();
+            let src_item = src.join(&item_name);
+            let dst_item = dst_type_dir.join(&item_name);
+
+            // Skip if already exists
+            if dst_item.exists() {
+                eprintln!(
+                    "  Warning: Skipping '{}': already exists at {}",
+                    item_name,
+                    dst_item.display()
+                );
+                continue;
+            }
+
+            if src_item.is_dir() {
+                self.copy_directory(&src_item, &dst_item)?;
+                self.write_marker(&dst_item)?;
+            } else {
+                fs::copy(&src_item, &dst_item)?;
+            }
+        }
         Ok(())
     }
 

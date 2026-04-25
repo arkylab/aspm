@@ -54,8 +54,8 @@ pub struct InitArgs {
 #[derive(Parser)]
 pub struct InstallArgs {
     /// Install to specified directories (can be used multiple times)
-    /// Format: <path> or <path>::<mode> (mode: plain|claude)
-    /// Examples: --to .claude --to .cursor::plain
+    /// Format: <path> or <path>::<mode> (mode: plain|claude|compatible)
+    /// Examples: --to .claude --to .cursor::plain --to .qwen::compatible
     #[arg(long, value_name = "TARGET")]
     pub to: Vec<String>,
     
@@ -150,7 +150,8 @@ fn parse_install_target(value: &str) -> Result<InstallTarget> {
         match parts[1].to_lowercase().as_str() {
             "plain" => InstallMode::Plain,
             "claude" => InstallMode::Claude,
-            other => anyhow::bail!("invalid mode '{}', expected 'plain' or 'claude'", other),
+            "compatible" => InstallMode::Compatible,
+            other => anyhow::bail!("invalid mode '{}', expected 'plain', 'claude' or 'compatible'", other),
         }
     };
     
