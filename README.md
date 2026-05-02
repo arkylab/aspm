@@ -10,6 +10,7 @@ A Git-based package manager designed for AI-assisted development, similar to npm
 - 📥 **Simplified Version Rules**: Auto-selects the maximum version satisfying all dependencies
 - 🔧 **Universal Design**: Not limited to skills, supports any AI resource type
 - 🔌 **Multi-Format Support**: Install both aspm packages and Claude Code plugin repositories
+- 🎯 **Three Install Modes**: Plain, Claude, and Compatible modes for different AI tool directory structures
 
 ## Installation
 
@@ -242,18 +243,35 @@ Copies entire repo to `<target>/-plugins/<pkg>/` and updates `settings.local.jso
 
 **Note:** If the source repository lacks `.claude-plugin/marketplace.json`, aspm auto-generates it with the package name as marketplace name (suffixed with `-dev`).
 
+### Compatible Mode
+
+Copies resources to `<target>/<type>/<skill>/` without the package name layer, for compatibility with AI tools like Qwen that expect a flat resource directory structure:
+
+```
+.qwen/
+├── skills/
+│   └── brainstorming/        # No package name layer
+│       └── SKILL.md
+└── commands/
+```
+
+**Note:** Auto-detected when `install_to` path ends with `.qwen`. Existing resources with the same name are skipped with a warning to prevent overwriting.
+
 ### Mode Configuration
 
 ```yaml
-# Multiple targets with auto mode: .claude path → Claude mode, others → Plain mode
+# Multiple targets with auto mode: .claude → Claude mode, .qwen → Compatible mode, others → Plain mode
 install_to:
   - .claude
+  - .qwen
   - .agents
 # Or
 # Explicit mode configuration
 # install_to:
 #   - path: .claude
 #     mode: claude
+#   - path: .qwen
+#     mode: compatible
 #   - path: .agents
 #     mode: plain
 
@@ -302,6 +320,7 @@ aspm init --consumer          # Create a consumer project
 # Dependency Management
 aspm install                                                # Install all dependencies
 aspm install --to <dir>       # Install to specific directory
+aspm install --to .qwen::compatible  # Install to .qwen with compatible mode
 aspm install --extra <file>   # Merge extra config
 aspm install --aspkg <file>   # Use custom aspkg.yaml path
 aspm install --extra local.yaml --to .cursor --aspkg ./config/aspkg.yaml  # Combined options
